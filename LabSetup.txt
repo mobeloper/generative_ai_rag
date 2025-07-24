@@ -1,0 +1,20 @@
+
+Lab Setup
+============
+
+Step1: Create a project folder (In Desktop or any location of your choice) and open VSCode with the project folder and present working directory.
+
+Step2: Open Terminal (Ensure its cmd incase of Windows) and Create a Python 3.11 base environment using the following command:
+
+conda create -n langchainenv python=3.11.13
+
+
+Step3: Activate the Environment
+
+conda activate < fullDirectoryPath > 
+conda activate langchainenv
+
+
+Step4: Install requirements.txt
+
+pip install -r requirements.txt
