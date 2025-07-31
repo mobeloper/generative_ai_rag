@@ -11,3 +11,9 @@ conda create -n langchaienv
 
 
 pip install -r requirements.txt
+
+
+
+## Agentic AI
+
+Langgraph, n8n, autogen. For deployment AWS EC2 instance T2, need to pay for the static IP.
