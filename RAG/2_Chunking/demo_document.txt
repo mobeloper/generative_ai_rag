@@ -1,0 +1,2 @@
+abcdefghijkl This is an example of using text file in langchain
+langchain is a powerful framework

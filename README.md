@@ -7,7 +7,9 @@ https://drive.google.com/drive/folders/1_mLLpgzEooJkePynlJP49mBiM1BEiqcs
 
 ### Setup 
 
-conda create -n langchaienv 
+conda create -n langchainenv 
+
+conda activate /opt/anaconda3/envs/langchainenv
 
 
 pip install -r requirements.txt
