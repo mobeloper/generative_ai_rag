@@ -1,10 +1,12 @@
-# app.py
+# app3.py
 
 # ==============================================================================
 # Step 1: Import essential tools and set up the OpenAI API environment
 # ==============================================================================
 import os
-import json # Import the json module to parse the router's output
+import json
+import requests
+from bs4 import BeautifulSoup
 from flask import Flask, render_template_string, request, jsonify
 from dotenv import load_dotenv, find_dotenv
 from langchain_community.vectorstores import FAISS
@@ -12,11 +14,14 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain.prompts import PromptTemplate
-from langchain_community.document_loaders import TextLoader
+from langchain_core.documents import Document # Corrected import for Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain.chains import create_retrieval_chain 
+from langchain.chains import create_retrieval_chain
 from langchain_core.runnables import RunnablePassthrough, RunnableLambda, RunnableBranch
+
+
+# os.system('pip install requests beautifulsoup4')
 
 # ==============================================================================
 # Step 2: Set up the OpenAI API Key
@@ -25,44 +30,68 @@ from langchain_core.runnables import RunnablePassthrough, RunnableLambda, Runnab
 load_dotenv(find_dotenv())
 
 # Initialize the LLM and Embeddings model
-# Setting temperature to 0 for more consistent responses
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 embeddings = OpenAIEmbeddings()
 
 # ==============================================================================
-# Step 3: Prepare Data
+# Step 3: Prepare Data from Notion URLs using a custom scraper
 # ==============================================================================
-def load_data_from_file(file_path):
-    """Loads and splits a single text file."""
+# Define the URLs for each domain
+urls = {
+    "dining": "https://www.notion.so/eric-michel/dining-251a3168f4d080d9b4a0e626fe9e8d9c",
+    "rooms": "https://www.notion.so/eric-michel/rooms-251a3168f4d08090be6cdc607f3b7720",
+    "wellness": "https://www.notion.so/eric-michel/wellness-251a3168f4d0800bbc51e57865cd5312"
+}
+
+def scrape_notion_url(url):
+    """
+    Fetches text content from a Notion URL using requests and BeautifulSoup.
+    This is more reliable than standard loaders for dynamically-rendered pages.
+    """
     try:
-        print(f"Loading data from {file_path}...")
-        loader = TextLoader(file_path)
-        documents = loader.load()
-        # Increased chunk size for better context.
-        # A small chunk size of 20 characters is often too little.
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
-        chunks = text_splitter.split_documents(documents)
-        print(f"Loaded {len(chunks)} chunks from {file_path}.")
-        return chunks
-    except FileNotFoundError:
-        print(f"Error: The file {file_path} was not found. Please create it.")
+        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
+        response.raise_for_status()  # Raise an exception for bad status codes
+        soup = BeautifulSoup(response.content, 'html.parser')
+
+        # Find all text content from paragraphs, headers, etc.
+        # This targets the main content body of a Notion page
+        text_content = ' '.join([p.get_text() for p in soup.find_all(['p', 'h1', 'h2', 'h3', 'li'])])
+        return text_content.strip()
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching URL {url}: {e}")
+        return None
+
+all_docs = []
+print("Loading and splitting documents from Notion URLs...")
+try:
+    for domain, url in urls.items():
+        content = scrape_notion_url(url)
+        if content:
+            doc = Document(page_content=content, metadata={"source": url, "domain": domain})
+            all_docs.append(doc)
+
+    if not all_docs:
+        print("No documents were loaded. Check the URLs and your network connection.")
         exit()
 
+    # Split the documents for each domain
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
 
-# Ingest data from the three specified files
-try:
-    dining_docs = load_data_from_file("./dining.txt")
-    rooms_docs = load_data_from_file("./rooms.txt")
-    wellness_docs = load_data_from_file("./wellness.txt")
-except FileNotFoundError:
-    print("Please make sure the dining.txt, rooms.txt, and wellness.txt files exist in the current directory.")
-    exit()
+    dining_docs = text_splitter.split_documents([doc for doc in all_docs if doc.metadata.get("domain") == "dining"])
+    rooms_docs = text_splitter.split_documents([doc for doc in all_docs if doc.metadata.get("domain") == "rooms"])
+    wellness_docs = text_splitter.split_documents([doc for doc in all_docs if doc.metadata.get("domain") == "wellness"])
     
+    print(f"Loaded {len(dining_docs)} chunks for dining.")
+    print(f"Loaded {len(rooms_docs)} chunks for rooms.")
+    print(f"Loaded {len(wellness_docs)} chunks for wellness.")
+    
+except Exception as e:
+    print(f"An error occurred while loading data: {e}")
+    exit()
 
 # ==============================================================================
 # Step 4: Create Embeddings and Vector Stores for each domain
 # ==============================================================================
-# Create a dictionary of FAISS vector stores directly from the loaded documents.
 print("Creating FAISS vector stores for all domains...")
 vector_stores = {
     "dining": FAISS.from_documents(dining_docs, embeddings),
@@ -74,14 +103,12 @@ print("FAISS vector stores created successfully.")
 # ==============================================================================
 # Step 5: Build Domain-Specific Retrievers and Prompts
 # ==============================================================================
-# Set up a retriever for each vector store.
 retrievers = {
     "dining": vector_stores["dining"].as_retriever(),
     "rooms": vector_stores["rooms"].as_retriever(),
     "wellness": vector_stores["wellness"].as_retriever()
 }
 
-# Define prompt templates for each domain.
 dining_template = """
 You are a concierge AI assistant for a luxury hotel, specializing in dining.
 Answer the user's question based ONLY on the following context. If the answer is not
@@ -118,8 +145,6 @@ Question:
 {input}
 """
 
-# Define a prompt for the router chain to help it decide which domain to use.
-# The prompt now explicitly asks for 'next_inputs' as a string.
 router_template = """
 Given a user's question, determine the most relevant domain to route it to.
 The available domains are:
@@ -143,29 +168,22 @@ Response:
 # ==============================================================================
 # Step 6: Implement a Router Chain (using modern LCEL approach)
 # ==============================================================================
-# Define the destination chains using the modern approach.
 dining_doc_chain = create_stuff_documents_chain(llm, ChatPromptTemplate.from_template(dining_template))
 rooms_doc_chain = create_stuff_documents_chain(llm, ChatPromptTemplate.from_template(rooms_template))
 wellness_doc_chain = create_stuff_documents_chain(llm, ChatPromptTemplate.from_template(wellness_template))
 
-# Create the retrieval chains for each domain
 dining_chain = create_retrieval_chain(retrievers["dining"], dining_doc_chain)
 rooms_chain = create_retrieval_chain(retrievers["rooms"], rooms_doc_chain)
 wellness_chain = create_retrieval_chain(retrievers["wellness"], wellness_doc_chain)
 
-# Create the default chain for non-domain questions using LCEL
 default_prompt = ChatPromptTemplate.from_template(
     "You are a general concierge AI assistant. You cannot provide information about specific hotel policies, dining, or wellness services. Please state that you can only answer general questions. User's question: {input}"
 )
 default_chain = default_prompt | llm
 
-# Create the router chain. It's a runnable sequence: prompt -> llm -> parse JSON
 router_prompt = PromptTemplate(template=router_template, input_variables=["input"])
 router_chain = router_prompt | llm | RunnableLambda(lambda x: json.loads(x.content))
 
-# Use a RunnableBranch to route the requests based on the router's output.
-# The router's output is expected to be a JSON object with a 'destination' key.
-# We will use this key to route to the correct chain.
 full_chain = (
     RunnablePassthrough.assign(
         route=router_chain,
@@ -178,7 +196,6 @@ full_chain = (
     )
 )
 
-# Initialize a chat history list for the Flask app.
 chat_history = []
 
 # ==============================================================================
@@ -186,7 +203,6 @@ chat_history = []
 # ==============================================================================
 app = Flask(__name__)
 
-# HTML template string for a clean, responsive UI with Tailwind CSS
 html_template = """
 <!DOCTYPE html>
 <html lang="en">
@@ -194,8 +210,6 @@ html_template = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Luxury Hotel Concierge AI</title>
-    <meta name="author" content="Eric Michel">
-    <meta name="copyright" content="Copyright &#169; Since 2025 Eric Michel. All Rights Reserved.">
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap');
@@ -205,7 +219,7 @@ html_template = """
 <body class="bg-gray-100 flex items-center justify-center min-h-screen p-4">
     <div class="bg-white shadow-xl rounded-2xl w-full max-w-2xl overflow-hidden flex flex-col h-[80vh]">
         <div class="bg-emerald-600 text-white p-4 flex items-center justify-between shadow-md">
-            <h1 class="text-xl font-bold">Luxury Hotel AI Concierge </h1>
+            <h1 class="text-xl font-bold">Luxury Hotel Concierge AI</h1>
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-6 w-6"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
         </div>
         <div id="chat-history" class="flex-1 p-4 overflow-y-auto space-y-4">
@@ -324,13 +338,10 @@ def chat():
         return jsonify({"response": "Please enter a query."}), 400
 
     try:
-        # Get the response from the router chain
-        # The new chain takes a dictionary with 'input' and 'chat_history' as a list
         response = full_chain.invoke(
             {"input": user_query, "chat_history": chat_history}
         )
         
-        # Add the new messages to the chat history for context in the next turn.
         chat_history.append(HumanMessage(content=user_query))
         chat_history.append(AIMessage(content=response["answer"]))
         

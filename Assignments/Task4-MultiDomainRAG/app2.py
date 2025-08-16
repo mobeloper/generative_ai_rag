@@ -12,11 +12,15 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain.prompts import PromptTemplate
-from langchain_community.document_loaders import TextLoader
+from langchain_community.document_loaders import WebBaseLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains import create_retrieval_chain 
 from langchain_core.runnables import RunnablePassthrough, RunnableLambda, RunnableBranch
+
+from langchain_community.document_loaders import UnstructuredURLLoader 
+
+# os.system('pip install langchain_community unstructured "unstructured[html]"')
 
 # ==============================================================================
 # Step 2: Set up the OpenAI API Key
@@ -30,33 +34,60 @@ llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 embeddings = OpenAIEmbeddings()
 
 # ==============================================================================
-# Step 3: Prepare Data
+# Step 3: Prepare Data from URLs
 # ==============================================================================
-def load_data_from_file(file_path):
-    """Loads and splits a single text file."""
-    try:
-        print(f"Loading data from {file_path}...")
-        loader = TextLoader(file_path)
-        documents = loader.load()
-        # Increased chunk size for better context.
-        # A small chunk size of 20 characters is often too little.
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
-        chunks = text_splitter.split_documents(documents)
-        print(f"Loaded {len(chunks)} chunks from {file_path}.")
-        return chunks
-    except FileNotFoundError:
-        print(f"Error: The file {file_path} was not found. Please create it.")
+# Define the URLs for each domain
+urls = {
+    "dining": "https://www.notion.so/eric-michel/dining-251a3168f4d080d9b4a0e626fe9e8d9c",
+    "rooms": "https://www.notion.so/eric-michel/rooms-251a3168f4d08090be6cdc607f3b7720",
+    "wellness": "https://www.notion.so/eric-michel/wellness-251a3168f4d0800bbc51e57865cd5312"
+}
+
+# Ingest data from the three specified URLs
+print("Loading and splitting documents from URLs...")
+try:
+    # # Use WebBaseLoader to load content from the URLs
+    # loader = WebBaseLoader(list(urls.values()))
+    
+    # Use UnstructuredURLLoader to handle dynamic content
+    loader = UnstructuredURLLoader(urls=list(urls.values()))
+    
+    all_docs = loader.load()
+    print(f"Loaded {len(all_docs)} raw documents from the URLs.")
+
+    if not all_docs:
+        print("No documents were loaded. This may be due to a network or URL issue.")
         exit()
 
 
-# Ingest data from the three specified files
-try:
-    dining_docs = load_data_from_file("./dining.txt")
-    rooms_docs = load_data_from_file("./rooms.txt")
-    wellness_docs = load_data_from_file("./wellness.txt")
-except FileNotFoundError:
-    print("Please make sure the dining.txt, rooms.txt, and wellness.txt files exist in the current directory.")
+    print("\n--- Successfully Loaded Document Content ---")
+    for doc in all_docs:
+        # The 'source' metadata field contains the URL from which the text was loaded.
+        print(f"Source URL: {doc.metadata.get('source', 'Unknown')}")
+        print("Content:")
+        # The 'page_content' field holds the actual text of the document.
+        print(doc.page_content)
+        print("-" * 50)
+    
+    print("Data loading and printing complete.")
+
+    # Split the documents for each domain
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
+    
+    # Filter documents based on URL to assign them to the correct domain
+    dining_docs = text_splitter.split_documents([doc for doc in all_docs if "dining" in doc.metadata.get("source", "")])
+    rooms_docs = text_splitter.split_documents([doc for doc in all_docs if "rooms" in doc.metadata.get("source", "")])
+    wellness_docs = text_splitter.split_documents([doc for doc in all_docs if "wellness" in doc.metadata.get("source", "")])
+    
+    print(f"Loaded {len(dining_docs)} chunks for dining.")
+    print(f"Loaded {len(rooms_docs)} chunks for rooms.")
+    print(f"Loaded {len(wellness_docs)} chunks for wellness.")
+    
+except Exception as e:
+    print(f"An error occurred while loading data from the URLs: {e}")
     exit()
+    
+    
     
 
 # ==============================================================================
@@ -194,8 +225,6 @@ html_template = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Luxury Hotel Concierge AI</title>
-    <meta name="author" content="Eric Michel">
-    <meta name="copyright" content="Copyright &#169; Since 2025 Eric Michel. All Rights Reserved.">
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap');
@@ -205,7 +234,7 @@ html_template = """
 <body class="bg-gray-100 flex items-center justify-center min-h-screen p-4">
     <div class="bg-white shadow-xl rounded-2xl w-full max-w-2xl overflow-hidden flex flex-col h-[80vh]">
         <div class="bg-emerald-600 text-white p-4 flex items-center justify-between shadow-md">
-            <h1 class="text-xl font-bold">Luxury Hotel AI Concierge </h1>
+            <h1 class="text-xl font-bold">Luxury Hotel Concierge AI</h1>
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-6 w-6"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
         </div>
         <div id="chat-history" class="flex-1 p-4 overflow-y-auto space-y-4">
